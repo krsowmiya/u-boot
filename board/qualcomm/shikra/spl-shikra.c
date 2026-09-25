@@ -136,7 +136,8 @@ int arm_reserve_mmu(void)
 #define SHIKRA_RPM_STAGING_ADDR			0x04690000
 #define SHIKRA_RPM_STAGING_SIZE			0x1363c
 
-#define QCOM_SPL_FIT_IMG_PARTITION	"uefi_a"
+// #define QCOM_SPL_FIT_IMG_PARTITION	"uefi_a"
+#define QCOM_SPL_FIT_IMG_PARTITION	"core_nhlos_a"
 
 enum {
 	IPQ_SPL_BOOTCFG_DEV_MMC = 0x0,
