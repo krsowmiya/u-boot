@@ -525,11 +525,13 @@ def UpdateFile(infile, outfile, start_sym, end_sym, insert):
     tools.write_file(outfile, newdata)
     tout.info('Written to offset %#x' % syms[start_sym].offset)
 
-def read_loadable_segments(data):
+def read_loadable_segments(data, physical_entry=False):
     """Read segments from an ELF file
 
     Args:
         data (bytes): Contents of file
+        physical_entry (bool): Convert the ELF entry address from virtual to
+            physical address using its containing PT_LOAD segment
 
     Returns:
         tuple:
@@ -550,15 +552,22 @@ def read_loadable_segments(data):
         except ELFError as err:
             raise ValueError(err)
         entry = elf.header['e_entry']
+        entry_virt = entry
         segments = []
         for i in range(elf.num_segments()):
             segment = elf.get_segment(i)
             if segment['p_type'] != 'PT_LOAD' or not segment['p_memsz']:
                 skipped = 1  # To make code-coverage see this line
                 continue
+            if (physical_entry and
+                    segment['p_vaddr'] <= entry_virt <
+                    segment['p_vaddr'] + segment['p_memsz']):
+                entry = segment['p_paddr'] + (entry_virt -
+                                              segment['p_vaddr'])
             start = segment['p_offset']
             rend = start + segment['p_filesz']
-            segments.append((i, segment['p_paddr'], data[start:rend]))
+            segments.append((len(segments), segment['p_paddr'],
+                             data[start:rend]))
     return segments, entry
 
 def is_valid(data):

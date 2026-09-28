@@ -22,6 +22,193 @@
 	};
 };
 
+#ifdef CONFIG_SPL_LOAD_FIT
+/ {
+	binman: binman {
+		multiple-images;
+
+		itb {
+			filename = "spl/shikra_full.itb";
+
+			fit {
+				description = "FIT Image for Shikra boot loader";
+				#address-cells = <1>;
+
+				images {
+					pmic_cocos {
+						description = "pmic_cocos";
+						type = "firmware";
+						arch = "arm64";
+						os = "elf";
+						load = <0x0c294800>;
+						entry = <0x0c294800>;
+						compression = "none";
+						blob-ext {
+							filename = "Pmic_Cocos.bin";
+						};
+					};
+
+					pmic_wailua {
+						description = "pmic_wailua";
+						type = "firmware";
+						arch = "arm64";
+						os = "elf";
+						load = <0x0c2a0400>;
+						entry = <0x0c2a0400>;
+						compression = "none";
+						blob-ext {
+							filename = "Pmic_Wailua.bin";
+						};
+					};
+
+					dcb_lp4 {
+						description = "dcb_lp4";
+						type = "firmware";
+						arch = "arm64";
+						os = "elf";
+						load = <0x0c2a6400>;
+						entry = <0x0c2a6400>;
+						compression = "none";
+						blob-ext {
+							filename = "900B_7_0100_1_dcb.bin";
+						};
+					};
+
+					dcb_lp5 {
+						description = "dcb_lp5";
+						type = "firmware";
+						arch = "arm64";
+						os = "elf";
+						load = <0x0c2aac00>;
+						entry = <0x0c2aac00>;
+						compression = "none";
+						blob-ext {
+							filename = "900B_7_0100_0_dcb.bin";
+						};
+					};
+
+					ecc {
+						description = "ecc";
+						type = "firmware";
+						arch = "arm64";
+						os = "elf";
+						load = <0x0c2af400>;
+						entry = <0x0c2af400>;
+						compression = "none";
+						blob-ext {
+							filename = "Shikra_LCP.bin";
+						};
+					};
+
+					@shrm_SEQ {
+						fit,operation = "split-elf";
+						description = "shrmSEQ";
+						type = "firmware";
+						arch = "riscv";
+						compression = "none";
+						fit,load;
+						fit,entry;
+						fit,entry-physical;
+						fit,data;
+						blob-ext {
+							filename = "shrm.elf";
+						};
+					};
+
+					@qclib_SEQ {
+						fit,operation = "split-elf";
+						description = "qclibSEQ";
+						type = "firmware";
+						arch = "arm64";
+						os = "elf";
+						compression = "none";
+						fit,load;
+						fit,entry;
+						fit,entry-physical;
+						fit,data;
+						blob-ext {
+							filename = "QcLib.elf";
+						};
+					};
+
+					tfa_bl31_1 {
+						description = "tfa_bl311";
+						type = "firmware";
+						arch = "arm64";
+						os = "arm-trusted-firmware";
+						load = <0xa1300000>;
+						entry = <0xa1300000>;
+						compression = "none";
+						blob-ext {
+							filename = "bl31.bin";
+						};
+					};
+
+					optee_1 {
+						description = "optee1";
+						type = "firmware";
+						arch = "arm64";
+						os = "tee";
+						load = <0xa1400000>;
+						entry = <0xa1400000>;
+						compression = "none";
+						blob-ext {
+							filename = "tee-raw.bin";
+						};
+					};
+
+					uboot_1 {
+						description = "uboot1";
+						type = "standalone";
+						arch = "arm64";
+						os = "u-boot";
+						load = <0x9f400000>;
+						entry = <0x9f400000>;
+						compression = "none";
+						blob-ext {
+							filename = "u-boot.bin";
+						};
+					};
+
+					@rpm_SEQ {
+						fit,operation = "split-elf";
+						description = "rpmSEQ";
+						type = "firmware";
+						arch = "arm64";
+						compression = "none";
+						fit,load;
+						fit,entry;
+						fit,entry-physical;
+						fit,data;
+						blob-ext {
+							filename = "rpm.mbn";
+						};
+					};
+				};
+
+				configurations {
+					default = "post-ddr-config";
+
+					pre-ddr-config {
+						description = "pre-ddr";
+						loadables = "pmic_cocos", "pmic_wailua",
+							    "dcb_lp4", "dcb_lp5", "ecc",
+							    "shrm_1", "shrm_2",
+							    "qclib_1";
+					};
+
+					post-ddr-config {
+						description = "post-ddr";
+						loadables = "tfa_bl31_1", "uboot_1", "optee_1",
+							    "rpm_1", "rpm_2";
+					};
+				};
+			};
+		};
+	};
+};
+#endif
+
 &{/soc@0/sram@c11e000} {
 	compatible = "qcom,shikra-imem", "syscon", "simple-mfd";
 };

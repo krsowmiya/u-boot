@@ -321,6 +321,11 @@ class Entry_fit(Entry_section):
             Generates a `entry = <...>` property with the entry address of the
             ELF. This is only produced for the first entry
 
+        fit,entry-physical
+            Converts the ELF entry address from virtual to physical address
+            using the PT_LOAD segment that contains it. This is useful for
+            firmware loaders which use physical rather than virtual addresses.
+
         fit,data
             Generates a `data = <...>` property with the contents of the segment
 
@@ -929,6 +934,8 @@ class Entry_fit(Entry_section):
                         elif pname == 'fit,entry':
                             if seq == 0:
                                 fsw.property_u32('entry', entry_addr)
+                        elif pname == 'fit,entry-physical':
+                            pass
                         elif pname == 'fit,data':
                             fsw.property('data', bytes(data))
                         elif pname != 'fit,operation':
@@ -984,7 +991,10 @@ class Entry_fit(Entry_section):
                         elf_data = entry.GetData()
                         try:
                             segments, entry_addr = (
-                                    elf.read_loadable_segments(elf_data))
+                                    elf.read_loadable_segments(
+                                        elf_data,
+                                        fdt_util.GetBool(
+                                            node, 'fit,entry-physical')))
                         except ValueError as exc:
                             self._raise_subnode(
                                 node, f'Failed to read ELF file: {str(exc)}')

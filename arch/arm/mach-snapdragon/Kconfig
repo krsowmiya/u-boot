@@ -49,6 +49,14 @@ config SYS_CONFIG_NAME
 	  Based on this option include/configs/<CONFIG_SYS_CONFIG_NAME>.h header
 	  will be used for board configuration.
 
+config QCOM_BINMAN
+	bool "Enable Binman image packaging"
+	select BINMAN
+	help
+	  Enable Binman image packaging for Qualcomm platforms. Each board that
+	  enables this option must provide a /binman device-tree node describing
+	  its output images.
+
 config QCOM_FIT_MULTIDTB
 	bool "Enable FIT multi-DTB selection for Qualcomm platforms"
 	depends on FIT
