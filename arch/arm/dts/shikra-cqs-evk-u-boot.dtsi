@@ -184,6 +184,22 @@
 							filename = "rpm.mbn";
 						};
 					};
+
+					@mcumeta_SEQ {
+						fit,operation = "split-elf";
+						description = "mcuMETA";
+						type = "firmware";
+						arch = "arm64";
+						compression = "none";
+						fit,load;
+						fit,entry;
+						fit,entry-physical;
+						fit,null-data;
+						fit,data;
+						blob-ext {
+							filename = "mcu-meta.mbn";
+						};
+					};
 				};
 
 				configurations {
@@ -200,7 +216,7 @@
 					post-ddr-config {
 						description = "post-ddr";
 						loadables = "tfa_bl31_1", "uboot_1", "optee_1",
-							    "rpm_1", "rpm_2";
+							    "rpm_1", "rpm_2", "mcumeta_1";
 					};
 				};
 			};

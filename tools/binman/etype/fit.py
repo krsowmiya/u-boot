@@ -329,6 +329,15 @@ class Entry_fit(Entry_section):
         fit,data
             Generates a `data = <...>` property with the contents of the segment
 
+        fit,null-data
+            Indicates that any PT_NULL program-header segments found in the
+            ELF file (e.g. MCU/co-processor metadata) should be concatenated
+            and emitted as the `data` property of a separate, fixed-name
+            `mcu_metadata` image node. If the ELF file has no PT_NULL
+            segments with data, no such node is generated. Only one
+            generator node in a given FIT should use this directive, since
+            the generated node name is fixed (not based on SEQ).
+
         fit,firmware
             Generates a `firmware = <...>` property. Provides a list of possible
             nodes to be used as the `firmware` property value. The first valid
@@ -936,6 +945,8 @@ class Entry_fit(Entry_section):
                                 fsw.property_u32('entry', entry_addr)
                         elif pname == 'fit,entry-physical':
                             pass
+                        elif pname == 'fit,null-data':
+                            pass
                         elif pname == 'fit,data':
                             fsw.property('data', bytes(data))
                         elif pname != 'fit,operation':
@@ -945,6 +956,32 @@ class Entry_fit(Entry_section):
                     for subnode in node.subnodes:
                         with fsw.add_node(subnode.name):
                             _add_node(node, depth + 1, subnode)
+
+        def _gen_null_data_node(node, depth, null_data):
+            """Add a single 'mcu_metadata' node containing PT_NULL data
+
+            Args:
+                node (Node): Generator template node (providing description,
+                    type, arch, os, compression, etc.)
+                depth: Current node depth (0 is the base 'fit' node)
+                null_data (bytes): Concatenated contents of the ELF's PT_NULL
+                    segments
+            """
+            node_name = 'mcu_metadata'
+            with fsw.add_node(node_name):
+                loadables.append(node_name)
+                for pname, prop in node.props.items():
+                    if not pname.startswith('fit,'):
+                        fsw.property(pname, prop.bytes)
+                    elif pname == 'fit,data':
+                        fsw.property('data', bytes(null_data))
+                    # fit,load, fit,entry, fit,entry-physical,
+                    # fit,null-data and fit,operation are all ignored here;
+                    # this node has no load/entry address of its own.
+
+                for subnode in node.subnodes:
+                    with fsw.add_node(subnode.name):
+                        _add_node(node, depth + 1, subnode)
 
         def _gen_node(node, depth, in_images, entry):
             """Generate nodes from a template
@@ -1000,6 +1037,22 @@ class Entry_fit(Entry_section):
                                 node, f'Failed to read ELF file: {str(exc)}')
 
                     _gen_split_elf(node, depth, segments, entry_addr)
+
+                    # If requested, also collect any PT_NULL segments (e.g.
+                    # MCU/co-processor metadata) and emit them as a separate
+                    # 'mcu_metadata' image node
+                    if fdt_util.GetBool(node, 'fit,null-data'):
+                        elf_data = entry.GetData()
+                        try:
+                            null_data = elf.read_null_segments(
+                                elf_data, fname=entry.GetPath())
+                        except ValueError as exc:
+                            self._raise_subnode(
+                                node,
+                                f'Failed to read ELF file for PT_NULL '
+                                f'segments: {str(exc)}')
+                        if null_data:
+                            _gen_null_data_node(node, depth, null_data)
 
         def _add_node(base_node, depth, node):
             """Add nodes to the output FIT

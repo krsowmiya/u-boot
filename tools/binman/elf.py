@@ -570,6 +570,62 @@ def read_loadable_segments(data, physical_entry=False):
                              data[start:rend]))
     return segments, entry
 
+def read_null_segments(data, fname=None):
+    """Read PT_NULL segments from an ELF file and concatenate their data
+
+    Some ELF files carry additional metadata (e.g. MCU/co-processor
+    metadata) in a PT_NULL program header. This function collects the
+    file contents of any such segments (in program-header order) and
+    concatenates them into a single blob, so it can be treated as a
+    plain .bin and embedded into a FIT image.
+
+    Args:
+        data (bytes): Contents of file
+        fname (str): Optional filename of the ELF being parsed, used only
+            for debug logging
+
+    Returns:
+        bytes: Concatenated contents of all PT_NULL segments with a
+            non-zero file size, or None if there are no such segments
+
+    Raises:
+        ValueError: elftools is not available, or the data is not a valid
+            ELF file
+    """
+    if not ELF_TOOLS:
+        raise ValueError("Python: No module named 'elftools'")
+    print(f"DEBUG: read_null_segments: parsing file={fname!r}, "
+          f"data_len={len(data)}")
+    with io.BytesIO(data) as inf:
+        try:
+            elf = ELFFile(inf)
+        except ELFError as err:
+            raise ValueError(err)
+        parts = []
+        for i in range(elf.num_segments()):
+            segment = elf.get_segment(i)
+            print(f"DEBUG: read_null_segments: file={fname!r}, "
+                  f"segment {i}: type={segment['p_type']}, "
+                  f"offset=0x{segment['p_offset']:x}, "
+                  f"filesz=0x{segment['p_filesz']:x}")
+            if segment['p_type'] != 'PT_NULL' or not segment['p_filesz']:
+                continue
+            start = segment['p_offset']
+            rend = start + segment['p_filesz']
+            print(f"DEBUG: read_null_segments: file={fname!r}, "
+                  f"segment {i} is PT_NULL with data, capturing "
+                  f"0x{rend - start:x} bytes")
+            parts.append(data[start:rend])
+    if not parts:
+        print(f"DEBUG: read_null_segments: file={fname!r}, "
+              f"no PT_NULL segments with data found")
+        return None
+    result = b''.join(parts)
+    print(f"DEBUG: read_null_segments: file={fname!r}, "
+          f"returning {len(result)} bytes from {len(parts)} PT_NULL "
+          f"segment(s)")
+    return result
+
 def is_valid(data):
     """Check if some binary data is a valid ELF file
 
