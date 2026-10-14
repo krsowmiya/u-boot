@@ -12,6 +12,7 @@
 #include <dm/uclass.h>
 #include <init.h>
 #include <linux/err.h>
+#include <linux/kernel.h>
 #include <linux/sizes.h>
 #include <linux/string.h>
 #include <malloc.h>
@@ -126,6 +127,9 @@ int arm_reserve_mmu(void)
 #define SHIKRA_DCB_LP4_SIZE		0x4800
 #define SHIKRA_DCB_LP5_SIZE		0x4800
 #define SHIKRA_ECC_SIZE			0x400
+
+/* DDR training-data storage partition name */
+#define SHIKRA_DDR_TRAINING_PARTITION	"ddr"
 
 #define SHIKRA_SHRM2_SPROC_CTRL_ADDR			0x0c36000
 #define SHIKRA_SHRM2_SPROC_CTRL_CORE_SW_RESET_BMSK	BIT(1)
@@ -313,6 +317,174 @@ fail:
 		reset_cpu();
 }
 #endif
+
+/*
+ * Set by shikra_ddr_training_load() before QCLIB is invoked; consumed by
+ * qcom_spl_soc_qclib_override() when it populates the "ddr_training_data"
+ * entry's reported size. 0 means no valid training data was read back
+ * from storage (first boot, or an unprovisioned/corrupt partition) - in
+ * that case the entry's size instead reports the full buffer capacity,
+ * since QCLIB still needs to know how much space it has available to
+ * write newly-trained data into.
+ */
+static u32 g_ddr_training_valid_size __section(".data");
+
+/**
+ * shikra_ddr_training_get_blk_desc() - Resolve the DDR training partition's
+ * block device.
+ * @descp:	Set to the resolved block device on success.
+ *
+ * The DDR training-data partition lives on the same eMMC device as the
+ * rest of SPL's boot-time partitions, so this simply mirrors
+ * spl_mmc_boot_partition()'s existing lookup (fixed UCLASS_MMC devnum 0)
+ * rather than re-deriving the boot device from spl_boot_device().
+ *
+ * Return: 0 on success, or a negative error code if the block device
+ * can't be found.
+ */
+static int shikra_ddr_training_get_blk_desc(struct blk_desc **descp)
+{
+	if (!IS_ENABLED(CONFIG_MMC))
+		return -ENOSYS;
+
+	*descp = blk_get_devnum_by_uclass_id(UCLASS_MMC, 0);
+	if (!*descp)
+		return -ENODEV;
+
+	return 0;
+}
+
+/**
+ * shikra_ddr_training_load() - Load saved DDR training data from storage.
+ *
+ * On the open boot flow, SPL - not SBL1 - owns storage access, so SPL
+ * (not QCLIB) must read any previously-saved DDR training data off the
+ * dedicated storage partition (SHIKRA_DDR_TRAINING_PARTITION) into the
+ * fixed buffer QCLIB will be told about (SHIKRA_DDR_TRAINING_DATA_ADDR),
+ * before QCLIB is invoked. qcom_spl_soc_qclib_override() then reports
+ * g_ddr_training_valid_size (set here) as the "ddr_training_data" entry's
+ * size, so QCLIB can tell a valid restore blob from an empty/allocated
+ * buffer and skip full retraining where it supports doing so.
+ *
+ * This is entirely optional and non-fatal: if the partition can't be
+ * found or read (e.g. first boot, before anything has ever been saved),
+ * g_ddr_training_valid_size is left at 0 and QCLIB simply performs full
+ * DDR training against an empty buffer, exactly as it did before this
+ * support existed.
+ */
+static void shikra_ddr_training_load(void)
+{
+	struct blk_desc *desc;
+	struct disk_partition info;
+	lbaint_t blocks;
+	int ret;
+
+	g_ddr_training_valid_size = 0;
+
+	printf("DDR training: looking up partition '%s' on boot media\n",
+	       SHIKRA_DDR_TRAINING_PARTITION);
+
+	ret = shikra_ddr_training_get_blk_desc(&desc);
+	if (ret) {
+		pr_err("DDR training: boot device not supported (%d)\n", ret);
+		return;
+	}
+
+	ret = part_get_info_by_name(desc, SHIKRA_DDR_TRAINING_PARTITION, &info);
+	if (ret < 0) {
+		pr_err("DDR training: partition not found (%d)\n", ret);
+		return;
+	}
+
+	blocks = DIV_ROUND_UP(SHIKRA_DDR_TRAINING_DATA_SIZE, info.blksz);
+	if (blocks > info.size)
+		blocks = info.size;
+
+	printf("DDR training: reading %lu block(s) (blksz=%lu) from partition '%s' (start=0x%lx) into buffer 0x%08x\n",
+	       (unsigned long)blocks, (unsigned long)info.blksz,
+	       SHIKRA_DDR_TRAINING_PARTITION, (unsigned long)info.start,
+	       SHIKRA_DDR_TRAINING_DATA_ADDR);
+
+	if (blk_dread(desc, info.start, blocks,
+		     (void *)SHIKRA_DDR_TRAINING_DATA_ADDR) != blocks) {
+		pr_err("DDR training: failed to read partition '%s'\n",
+		       SHIKRA_DDR_TRAINING_PARTITION);
+		return;
+	}
+
+	g_ddr_training_valid_size = min_t(u32, (u32)blocks * info.blksz,
+					  SHIKRA_DDR_TRAINING_DATA_SIZE);
+
+	printf("DDR training: loaded %u byte(s) of saved training data from '%s' into 0x%08x\n",
+	       g_ddr_training_valid_size, SHIKRA_DDR_TRAINING_PARTITION,
+	       SHIKRA_DDR_TRAINING_DATA_ADDR);
+}
+
+/**
+ * shikra_ddr_training_save() - Persist DDR training data QCLIB asked to save.
+ * @entry:	The "ddr_training_data" interface-table entry, as updated by
+ *		QCLIB on return - its address/size describe the blob to save.
+ *
+ * Called from qcom_spl_soc_post_qclib_routine() only when QCLIB set
+ * QCLIB_ATTR_SAVE_TO_STORAGE on the "ddr_training_data" entry, i.e. QCLIB
+ * performed DDR training and wants the result written back to storage.
+ * If QCLIB did not set that attribute, this is never called and nothing
+ * is written.
+ *
+ * Writes entry->size bytes starting at entry->address to the DDR
+ * training storage partition, so a later boot's shikra_ddr_training_load()
+ * can restore it. Failures are logged but non-fatal to boot: DRAM is
+ * already up and trained for the current boot, only the saved copy on
+ * storage is left stale/missing until a future successful save.
+ */
+static void shikra_ddr_training_save(const struct interface_table_entry *entry)
+{
+	struct blk_desc *desc;
+	struct disk_partition info;
+	lbaint_t blocks;
+	int ret;
+
+	if (!entry->address || !entry->size) {
+		pr_err("DDR training: QCLIB requested save with no data\n");
+		return;
+	}
+
+	ret = shikra_ddr_training_get_blk_desc(&desc);
+	if (ret) {
+		pr_err("DDR training: boot device not supported for save (%d)\n",
+		       ret);
+		return;
+	}
+
+	ret = part_get_info_by_name(desc, SHIKRA_DDR_TRAINING_PARTITION, &info);
+	if (ret < 0) {
+		pr_err("DDR training: partition not found for save (%d)\n", ret);
+		return;
+	}
+
+	blocks = DIV_ROUND_UP(entry->size, info.blksz);
+	if (blocks > info.size) {
+		pr_err("DDR training: data (%u bytes) too large for partition\n",
+		       entry->size);
+		return;
+	}
+
+	printf("DDR training: writing %u byte(s) (%lu block(s), blksz=%lu) from 0x%llx to partition '%s' (start=0x%lx)\n",
+	       entry->size, (unsigned long)blocks, (unsigned long)info.blksz,
+	       entry->address, SHIKRA_DDR_TRAINING_PARTITION,
+	       (unsigned long)info.start);
+
+	if (blk_dwrite(desc, info.start, blocks,
+		      (void *)(uintptr_t)entry->address) != blocks) {
+		pr_err("DDR training: failed to write partition '%s'\n",
+		       SHIKRA_DDR_TRAINING_PARTITION);
+		return;
+	}
+
+	printf("DDR training: successfully wrote training data to partition '%s'\n",
+	       SHIKRA_DDR_TRAINING_PARTITION);
+}
+
 int qcom_spl_soc_qclib_override(struct interface_table *table,
 				const void *fit, int images_node)
 {
@@ -326,6 +498,7 @@ int qcom_spl_soc_qclib_override(struct interface_table *table,
 		{ SHIKRA_DCB_LP5, SHIKRA_DCB_LP5_SIZE },
 		{ SHIKRA_ECC, SHIKRA_ECC_SIZE },
 	};
+	struct interface_table_entry ddr_training_entry;
 	uint i;
 	int ret;
 
@@ -337,11 +510,34 @@ int qcom_spl_soc_qclib_override(struct interface_table *table,
 			return ret;
 	}
 
+	/*
+	 * First boot (nothing valid read from storage): hand QCLIB the
+	 * empty/allocated buffer at its full capacity so it has room to
+	 * write freshly-trained data into.
+	 * Subsequent boots (shikra_ddr_training_load() read saved data):
+	 * report the actual valid size read, so QCLIB can restore from it
+	 * and skip full retraining where supported.
+	 */
 	ret = qclib_add_iftbl_entry(table, SHIKRA_DDR_TRAINING_DATA,
 				    SHIKRA_DDR_TRAINING_DATA_ADDR,
+				    g_ddr_training_valid_size ?
+				    g_ddr_training_valid_size :
 				    SHIKRA_DDR_TRAINING_DATA_SIZE);
 	if (ret)
 		return ret;
+
+	ret = qcom_spl_get_iftbl_entry_by_name(table, SHIKRA_DDR_TRAINING_DATA,
+					       &ddr_training_entry);
+	if (ret)
+		return ret;
+
+	printf("DDR training: giving QCLIB '%s' entry addr=0x%llx size=%u attributes=0x%x (%s)\n",
+	       SHIKRA_DDR_TRAINING_DATA, ddr_training_entry.address,
+	       ddr_training_entry.size, ddr_training_entry.attributes,
+	       g_ddr_training_valid_size ?
+	       "restore data from storage" :
+	       "empty/allocated buffer, first boot");
+
 	ret = qclib_add_iftbl_entry(table, SHIKRA_DDR_INFORMATION, 0, 0);
 	if (ret)
 		return ret;
@@ -362,6 +558,14 @@ void qcom_spl_soc_shrm_reset(void)
 int qcom_spl_soc_pre_qclib_routine(void)
 {
 	qcom_spl_soc_shrm_reset();
+
+	/*
+	 * Read any previously-saved DDR training data off storage into the
+	 * fixed buffer before qcom_spl_soc_qclib_override() populates the
+	 * "ddr_training_data" interface-table entry below - the entry's
+	 * reported size depends on whether a valid blob was found here.
+	 */
+	shikra_ddr_training_load();
 
 	return 0;
 }
@@ -397,6 +601,36 @@ int qcom_spl_soc_post_qclib_routine(struct interface_table *table)
 		return ret;
 
 	qclib_set_ddr_sr_exit_address(entry.address);
+
+	/*
+	 * QCLIB may have performed DDR training (first boot, or any boot
+	 * where restore from storage wasn't possible/sufficient) and
+	 * updated the "ddr_training_data" entry's address/size to describe
+	 * the resulting blob. It signals this back to SPL by setting
+	 * QCLIB_ATTR_SAVE_TO_STORAGE on that entry; only in that case does
+	 * SPL write the blob to the DDR training storage partition. If the
+	 * attribute isn't set (e.g. QCLIB successfully restored from the
+	 * data SPL already supplied, so nothing changed), nothing is
+	 * written back.
+	 */
+	ret = qcom_spl_get_iftbl_entry_by_name(table, SHIKRA_DDR_TRAINING_DATA,
+					       &entry);
+	if (ret)
+		return ret;
+
+	printf("DDR training: QCLIB returned '%s' entry addr=0x%llx size=%u attributes=0x%x\n",
+	       SHIKRA_DDR_TRAINING_DATA, entry.address, entry.size,
+	       entry.attributes);
+
+	if (entry.attributes & QCLIB_ATTR_SAVE_TO_STORAGE) {
+		printf("DDR training: SAVE_TO_STORAGE bit is SET - saving training data to partition '%s'\n",
+		       SHIKRA_DDR_TRAINING_PARTITION);
+		shikra_ddr_training_save(&entry);
+	} else {
+		printf("DDR training: SAVE_TO_STORAGE bit is NOT set - skipping write to partition '%s'\n",
+		       SHIKRA_DDR_TRAINING_PARTITION);
+	}
+
 	return 0;
 }
 
