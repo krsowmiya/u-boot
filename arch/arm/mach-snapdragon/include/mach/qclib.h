@@ -11,6 +11,7 @@
 #define IF_TABLE_VERSION		0x1
 #define QCSDI				"qcsdi"
 #define QCLIB_LOG_BUFFER		"qclib_log_buffer"
+#define RAMDUMP_METADATA		"ramdump_metadata"
 
 /* interface_table.global_attributes bits */
 #define QCLIB_GA_ENABLE_UART_LOGGING	BIT(0)
@@ -49,6 +50,12 @@ struct interface_table {
 	u32 reserved1;
 	u32 reserved2;
 	struct interface_table_entry if_table_entries[MAX_ENTRIES];
+};
+
+struct qclib_stage_info {
+	u32 stage;
+	u64 load_addr;
+	u64 entry_point;
 };
 
 /* Exported by fit-handler.c */
@@ -91,6 +98,8 @@ int qcom_spl_soc_post_qclib_routine(struct interface_table *if_tbl);
 
 int qclib_populate_interface_table(struct interface_table *if_tbl,
 				   const void *fit, int images_node);
+int qcom_spl_invoke_qclib_stage(u32 stage);
 int qcom_spl_invoke_qclib(void);
+int qclib_get_stage_info(u32 stage, struct qclib_stage_info *info);
 
 #endif /* __QCLIB_H__ */

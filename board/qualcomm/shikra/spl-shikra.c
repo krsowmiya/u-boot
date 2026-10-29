@@ -7,6 +7,7 @@
 #include <cpu_func.h>
 #include <asm/io.h>
 #include <asm/sections.h>
+#include <asm/global_data.h>
 #include <asm/system.h>
 #include <asm/armv8/mmu.h>
 #include <dm/uclass.h>
@@ -138,6 +139,9 @@ int arm_reserve_mmu(void)
 #define SHIKRA_RPM_STAGING_ADDR			0x04690000
 #define SHIKRA_RPM_STAGING_SIZE			0x1363c
 
+#define SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR	0x003d3000
+#define SHIKRA_TCSR_BOOT_MISC_DETECT_MASK	(BIT(4) | BIT(5))
+
 #define QCOM_SPL_FIT_IMG_PARTITION	"uefi_a"
 
 enum {
@@ -253,9 +257,30 @@ static void shikra_release_qupfw(void)
 #endif
 }
 
+static int shikra_load_fit_config(u8 boot_device, bool post_ddr)
+{
+	bool had_spl_init = !!(gd->flags & GD_FLG_SPL_INIT);
+	int ret;
+
+	if (post_ddr)
+		gd->flags |= GD_FLG_SPL_INIT;
+	else
+		gd->flags &= ~GD_FLG_SPL_INIT;
+
+	ret = qcom_spl_loader_pre_ddr(boot_device);
+
+	if (had_spl_init)
+		gd->flags |= GD_FLG_SPL_INIT;
+	else
+		gd->flags &= ~GD_FLG_SPL_INIT;
+
+	return ret;
+}
+
 void board_init_f(ulong dummy)
 {
 	int ret = 0;
+	u8 boot_device;
 
 	memset(__bss_start, 0, __bss_end - __bss_start);
 
@@ -294,7 +319,8 @@ void board_init_f(ulong dummy)
 	enable_caches();
 #endif
 
-	ret = qcom_spl_loader_pre_ddr(spl_boot_device());
+	boot_device = spl_boot_device();
+	ret = shikra_load_fit_config(boot_device, false);
 	if (ret) {
 		pr_debug("qcom_spl_loader_pre_ddr() failed (%d)\n", ret);
 		goto fail;
@@ -304,6 +330,28 @@ void board_init_f(ulong dummy)
 	if (ret) {
 		pr_debug("qcom_spl_invoke_qclib() failed (%d)\n", ret);
 		goto fail;
+	}
+
+	if (readl(SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR) &
+	    SHIKRA_TCSR_BOOT_MISC_DETECT_MASK) {
+		struct qclib_stage_info info;
+
+		/* Load post-ddr FIT config so ramdump image is present in memory. */
+		ret = shikra_load_fit_config(boot_device, true);
+		if (ret) {
+			pr_err("Failed loading post-ddr FIT config (%d)\n", ret);
+			goto fail;
+		}
+
+		ret = qcom_spl_invoke_qclib_stage(2);
+		if (ret) {
+			pr_err("qcom_spl_invoke_qclib_stage(2) failed (%d)\n", ret);
+			goto fail;
+		}
+
+		if (!qclib_get_stage_info(2, &info))
+			pr_info("ramdump FIT load=0x%llx entry=0x%llx\n",
+				info.load_addr, info.entry_point);
 	}
 
 	board_init_r(NULL, 0);
