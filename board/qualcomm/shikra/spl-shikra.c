@@ -7,6 +7,7 @@
 #include <cpu_func.h>
 #include <asm/io.h>
 #include <asm/sections.h>
+#include <asm/global_data.h>
 #include <asm/system.h>
 #include <asm/armv8/mmu.h>
 #include <dm/uclass.h>
@@ -138,6 +139,9 @@ int arm_reserve_mmu(void)
 #define SHIKRA_RPM_STAGING_ADDR			0x04690000
 #define SHIKRA_RPM_STAGING_SIZE			0x1363c
 
+#define SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR	0x003d3000
+#define SHIKRA_TCSR_BOOT_MISC_DETECT_MASK	(BIT(4) | BIT(5))
+
 #define QCOM_SPL_FIT_IMG_PARTITION	"uefi_a"
 
 enum {
@@ -253,9 +257,29 @@ static void shikra_release_qupfw(void)
 #endif
 }
 
+/*
+ * board_fit_config_name_match() (the generic SPL FIT-config selector) picks
+ * "pre-ddr" vs "post-ddr" based on GD_FLG_SPL_INIT. That flag's real meaning
+ * is "spl_init() has run" - true only once board_init_r() calls spl_init(),
+ * never during board_init_f() where this is called from. So it is always
+ * clear beforehand; just set/clear it directly here to steer config
+ * selection, without saving/restoring a prior value.
+ */
+static int shikra_load_fit_config(u8 boot_device, bool post_ddr)
+{
+	printf("\r\n FIT Config!!");
+	if (post_ddr)
+		gd->flags |= GD_FLG_SPL_INIT;
+	else
+		gd->flags &= ~GD_FLG_SPL_INIT;
+
+	return qcom_spl_loader_pre_ddr(boot_device);
+}
+
 void board_init_f(ulong dummy)
 {
 	int ret = 0;
+	u8 boot_device;
 
 	memset(__bss_start, 0, __bss_end - __bss_start);
 
@@ -294,7 +318,8 @@ void board_init_f(ulong dummy)
 	enable_caches();
 #endif
 
-	ret = qcom_spl_loader_pre_ddr(spl_boot_device());
+	boot_device = spl_boot_device();
+	ret = shikra_load_fit_config(boot_device, false);
 	if (ret) {
 		pr_debug("qcom_spl_loader_pre_ddr() failed (%d)\n", ret);
 		goto fail;
@@ -304,6 +329,40 @@ void board_init_f(ulong dummy)
 	if (ret) {
 		pr_debug("qcom_spl_invoke_qclib() failed (%d)\n", ret);
 		goto fail;
+	}
+
+	if (readl(SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR) &
+	    SHIKRA_TCSR_BOOT_MISC_DETECT_MASK) 
+	{
+		/*
+		 * QCLIB's DDR/PMIC bring-up above can leave the SDCC
+		 * controller unable to complete a data-line reset (seen as
+		 * "Reset 0x4 never completed" / MMC block read errors on
+		 * the subsequent FIT reload). Re-init the boot MMC device
+		 * before reading the post-ddr FIT for the ramdump path.
+		 */
+		printf("\r\n call 2nd QCLib");
+		ret = shikra_prepare_boot_mmc();
+		if (ret) {
+			pr_err("Failed to re-init boot MMC after QCLIB (%d)\n", ret);
+			goto fail;
+		}
+
+		/* Load post-ddr FIT config so ramdump image is present in memory. */
+		printf("\r\n Loading post-ddr FIT config into DDR (ramdump image)...\n");
+		ret = shikra_load_fit_config(boot_device, true);
+		if (ret) {
+			pr_err("Failed loading post-ddr FIT config (%d)\n", ret);
+			goto fail;
+		}
+		printf("Post-ddr FIT config loaded; ramdump image now resident in DDR\n");
+
+		qclib_set_stage(QCLIB_STAGE_2);
+		ret = qcom_spl_invoke_qclib();
+		if (ret) {
+			pr_err("qcom_spl_invoke_qclib() stage 2 failed (%d)\n", ret);
+			goto fail;
+		}
 	}
 
 	board_init_r(NULL, 0);
@@ -347,6 +406,30 @@ int qcom_spl_soc_qclib_override(struct interface_table *table,
 		return ret;
 
 	return qclib_add_iftbl_entry(table, SHIKRA_DDR_SR_EXIT, 0, 0);
+}
+
+int qcom_spl_soc_qclib_stage2_override(struct interface_table *table,
+				       const void *fit, int images_node)
+{
+	static const struct {
+		const char *name;
+		u32 size;
+	} fit_blobs[] = {
+		{ SHIKRA_PMIC_COCOS, SHIKRA_PMIC_COCOS_SIZE },
+		{ SHIKRA_PMIC_WAILUA, SHIKRA_PMIC_WAILUA_SIZE },
+		{ SHIKRA_ECC, SHIKRA_ECC_SIZE },
+	};
+	uint i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(fit_blobs); i++) {
+		ret = qclib_add_iftbl_fit_blob(table, fit, images_node,
+					       fit_blobs[i].name, fit_blobs[i].size);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 void qcom_spl_soc_shrm_reset(void)
