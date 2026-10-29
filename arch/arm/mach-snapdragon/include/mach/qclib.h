@@ -11,6 +11,11 @@
 #define IF_TABLE_VERSION		0x1
 #define QCSDI				"qcsdi"
 #define QCLIB_LOG_BUFFER		"qclib_log_buffer"
+#define RAMDUMP_METADATA		"ramdump_metadata"
+
+/* QCLIB invocation stages, used with qclib_set_stage() */
+#define QCLIB_STAGE_1			1
+#define QCLIB_STAGE_2			2
 
 /* interface_table.global_attributes bits */
 #define QCLIB_GA_ENABLE_UART_LOGGING	BIT(0)
@@ -90,10 +95,19 @@ void qcom_spl_soc_rpm_reset(void);
 int qcom_spl_soc_pre_qclib_routine(void);
 int qcom_spl_soc_qclib_override(struct interface_table *table, const void *fit,
 				int images_node);
+int qcom_spl_soc_qclib_stage2_override(struct interface_table *table,
+				       const void *fit, int images_node);
 int qcom_spl_soc_post_qclib_routine(struct interface_table *if_tbl);
 
 int qclib_populate_interface_table(struct interface_table *if_tbl,
 				   const void *fit, int images_node);
 int qcom_spl_invoke_qclib(void);
+
+/*
+ * Stage selector for qcom_spl_invoke_qclib(). Defaults to stage 1; a
+ * caller needing a later invocation (e.g. the stage-2 ramdump collector
+ * entry) sets this before calling qcom_spl_invoke_qclib() again.
+ */
+void qclib_set_stage(u32 stage);
 
 #endif /* __QCLIB_H__ */
