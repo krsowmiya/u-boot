@@ -13,6 +13,10 @@
 #define QCLIB_LOG_BUFFER		"qclib_log_buffer"
 #define RAMDUMP_METADATA		"ramdump_metadata"
 
+/* QCLIB invocation stages, used with qclib_set_stage() */
+#define QCLIB_STAGE_1			1
+#define QCLIB_STAGE_2			2
+
 /* interface_table.global_attributes bits */
 #define QCLIB_GA_ENABLE_UART_LOGGING	BIT(0)
 
@@ -50,12 +54,6 @@ struct interface_table {
 	u32 reserved1;
 	u32 reserved2;
 	struct interface_table_entry if_table_entries[MAX_ENTRIES];
-};
-
-struct qclib_stage_info {
-	u32 stage;
-	u64 load_addr;
-	u64 entry_point;
 };
 
 /* Exported by fit-handler.c */
@@ -98,8 +96,13 @@ int qcom_spl_soc_post_qclib_routine(struct interface_table *if_tbl);
 
 int qclib_populate_interface_table(struct interface_table *if_tbl,
 				   const void *fit, int images_node);
-int qcom_spl_invoke_qclib_stage(u32 stage);
 int qcom_spl_invoke_qclib(void);
-int qclib_get_stage_info(u32 stage, struct qclib_stage_info *info);
+
+/*
+ * Stage selector for qcom_spl_invoke_qclib(). Defaults to stage 1; a
+ * caller needing a later invocation (e.g. the stage-2 ramdump collector
+ * entry) sets this before calling qcom_spl_invoke_qclib() again.
+ */
+void qclib_set_stage(u32 stage);
 
 #endif /* __QCLIB_H__ */

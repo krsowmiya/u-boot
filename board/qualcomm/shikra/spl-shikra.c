@@ -257,24 +257,23 @@ static void shikra_release_qupfw(void)
 #endif
 }
 
+/*
+ * board_fit_config_name_match() (the generic SPL FIT-config selector) picks
+ * "pre-ddr" vs "post-ddr" based on GD_FLG_SPL_INIT. That flag's real meaning
+ * is "spl_init() has run" - true only once board_init_r() calls spl_init(),
+ * never during board_init_f() where this is called from. So it is always
+ * clear beforehand; just set/clear it directly here to steer config
+ * selection, without saving/restoring a prior value.
+ */
 static int shikra_load_fit_config(u8 boot_device, bool post_ddr)
 {
-	bool had_spl_init = !!(gd->flags & GD_FLG_SPL_INIT);
-	int ret;
-
+	printf("\r\n 2nd cal!!");
 	if (post_ddr)
 		gd->flags |= GD_FLG_SPL_INIT;
 	else
 		gd->flags &= ~GD_FLG_SPL_INIT;
 
-	ret = qcom_spl_loader_pre_ddr(boot_device);
-
-	if (had_spl_init)
-		gd->flags |= GD_FLG_SPL_INIT;
-	else
-		gd->flags &= ~GD_FLG_SPL_INIT;
-
-	return ret;
+	return qcom_spl_loader_pre_ddr(boot_device);
 }
 
 void board_init_f(ulong dummy)
@@ -332,9 +331,22 @@ void board_init_f(ulong dummy)
 		goto fail;
 	}
 
-	if (readl(SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR) &
-	    SHIKRA_TCSR_BOOT_MISC_DETECT_MASK) {
-		struct qclib_stage_info info;
+	// if (readl(SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR) &
+	//     SHIKRA_TCSR_BOOT_MISC_DETECT_MASK) 
+	if (1)
+	{
+		/*
+		 * QCLIB's DDR/PMIC bring-up above can leave the SDCC
+		 * controller unable to complete a data-line reset (seen as
+		 * "Reset 0x4 never completed" / MMC block read errors on
+		 * the subsequent FIT reload). Re-init the boot MMC device
+		 * before reading the post-ddr FIT for the ramdump path.
+		 */
+		ret = shikra_prepare_boot_mmc();
+		if (ret) {
+			pr_err("Failed to re-init boot MMC after QCLIB (%d)\n", ret);
+			goto fail;
+		}
 
 		/* Load post-ddr FIT config so ramdump image is present in memory. */
 		ret = shikra_load_fit_config(boot_device, true);
@@ -343,15 +355,12 @@ void board_init_f(ulong dummy)
 			goto fail;
 		}
 
-		ret = qcom_spl_invoke_qclib_stage(2);
+		qclib_set_stage(QCLIB_STAGE_2);
+		ret = qcom_spl_invoke_qclib();
 		if (ret) {
-			pr_err("qcom_spl_invoke_qclib_stage(2) failed (%d)\n", ret);
+			pr_err("qcom_spl_invoke_qclib() stage 2 failed (%d)\n", ret);
 			goto fail;
 		}
-
-		if (!qclib_get_stage_info(2, &info))
-			pr_info("ramdump FIT load=0x%llx entry=0x%llx\n",
-				info.load_addr, info.entry_point);
 	}
 
 	board_init_r(NULL, 0);

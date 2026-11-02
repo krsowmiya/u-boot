@@ -18,7 +18,20 @@
 static u64 g_qcsdi_address __section(".data");
 static u64 g_log_buffer_entry __section(".data");
 static u64 g_ddr_sr_exit_address __section(".data");
-static struct qclib_stage_info g_qclib_stage_info[MAX_ENTRIES] __section(".data");
+
+/*
+ * Which QCLIB stage the next qcom_spl_invoke_qclib() call should run as.
+ * Defaults to stage 1 (the common/initial QCLIB entry). A caller that
+ * needs a later invocation (e.g. the stage-2 ramdump collector entry)
+ * sets this explicitly via qclib_set_stage() before calling
+ * qcom_spl_invoke_qclib() again, instead of passing a stage argument.
+ */
+static u32 g_qclib_stage __section(".data") = QCLIB_STAGE_1;
+
+void qclib_set_stage(u32 stage)
+{
+	g_qclib_stage = stage;
+}
 
 u64 qclib_get_ddr_sr_exit_address(void)
 {
@@ -141,8 +154,8 @@ int __weak qclib_populate_interface_table(struct interface_table *if_tbl,
 	return qcom_spl_soc_qclib_override(if_tbl, fit, images_node);
 }
 
-static int qclib_find_fit_nodes(const void *fit, u32 stage,
-				int *images_node, int *qclib_node)
+static int qclib_find_fit_nodes(const void *fit, int *images_node,
+				int *qclib_node)
 {
 	*images_node = fdt_subnode_offset(fit, 0, "images");
 	if (*images_node < 0) {
@@ -150,7 +163,7 @@ static int qclib_find_fit_nodes(const void *fit, u32 stage,
 		return -ENOENT;
 	}
 
-	if (stage == 2) {
+	if (g_qclib_stage == QCLIB_STAGE_2) {
 		*qclib_node = fdt_subnode_offset(fit, *images_node, "ramdump");
 		if (*qclib_node < 0) {
 			pr_err("Failed to find ramdump node in FIT\n");
@@ -167,19 +180,7 @@ static int qclib_find_fit_nodes(const void *fit, u32 stage,
 	return 0;
 }
 
-int qclib_get_stage_info(u32 stage, struct qclib_stage_info *info)
-{
-	if (!info || !stage || stage > MAX_ENTRIES)
-		return -EINVAL;
-
-	*info = g_qclib_stage_info[stage - 1];
-	if (!info->stage)
-		return -ENOENT;
-
-	return 0;
-}
-
-int qcom_spl_invoke_qclib_stage(u32 stage)
+int qcom_spl_invoke_qclib(void)
 {
 	int ret;
 	int images_node;
@@ -188,14 +189,14 @@ int qcom_spl_invoke_qclib_stage(u32 stage)
 	struct interface_table if_tbl;
 	u64 entry_point;
 	ulong load_addr;
-	struct qclib_stage_info *stage_info;
+	u32 stage = g_qclib_stage;
 
 	/* Get FIT image from SPL load address */
 	fit = (const void *)CONFIG_SPL_LOAD_FIT_ADDRESS;
 
 	pr_debug("QCLIB invoke stage %u: fit=%p\n", stage, fit);
 
-	ret = qclib_find_fit_nodes(fit, stage, &images_node, &qclib_node);
+	ret = qclib_find_fit_nodes(fit, &images_node, &qclib_node);
 	if (ret)
 		return ret;
 
@@ -213,7 +214,7 @@ int qcom_spl_invoke_qclib_stage(u32 stage)
 	if (fit_image_get_load(fit, qclib_node, &load_addr))
 		load_addr = (ulong)entry_point;
 
-	if (stage == 2) {
+	if (stage == QCLIB_STAGE_2) {
 		/*
 		 * The ramdump collector needs a fresh interface table -
 		 * qclib_init_iftbl() must run again right before this 2nd
@@ -240,14 +241,9 @@ int qcom_spl_invoke_qclib_stage(u32 stage)
 			return ret;
 	}
 
-	stage_info = &g_qclib_stage_info[stage - 1];
-	stage_info->stage = stage;
-	stage_info->load_addr = load_addr;
-	stage_info->entry_point = entry_point;
-
 	pr_info("Jumping to qcom-lib-%u at 0x%llx\n", stage, entry_point);
 	pr_debug("qcom-lib-%u load address from FIT: 0x%llx\n", stage,
-		 stage_info->load_addr);
+		 load_addr);
 
 	/*
 	 * QCLIB is a separately-linked firmware image, not an AAPCS64
@@ -275,9 +271,4 @@ int qcom_spl_invoke_qclib_stage(u32 stage)
 	}
 
 	return qcom_spl_soc_post_qclib_routine(&if_tbl);
-}
-
-int qcom_spl_invoke_qclib(void)
-{
-	return qcom_spl_invoke_qclib_stage(1);
 }
