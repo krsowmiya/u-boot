@@ -267,7 +267,7 @@ static void shikra_release_qupfw(void)
  */
 static int shikra_load_fit_config(u8 boot_device, bool post_ddr)
 {
-	printf("\r\n 2nd cal!!");
+	printf("\r\n FIT Config!!");
 	if (post_ddr)
 		gd->flags |= GD_FLG_SPL_INIT;
 	else
@@ -342,6 +342,7 @@ void board_init_f(ulong dummy)
 		 * the subsequent FIT reload). Re-init the boot MMC device
 		 * before reading the post-ddr FIT for the ramdump path.
 		 */
+		printf("\r\n call 2nd QCLib");
 		ret = shikra_prepare_boot_mmc();
 		if (ret) {
 			pr_err("Failed to re-init boot MMC after QCLIB (%d)\n", ret);
@@ -349,11 +350,13 @@ void board_init_f(ulong dummy)
 		}
 
 		/* Load post-ddr FIT config so ramdump image is present in memory. */
+		printf("\r\n Loading post-ddr FIT config into DDR (ramdump image)...\n");
 		ret = shikra_load_fit_config(boot_device, true);
 		if (ret) {
 			pr_err("Failed loading post-ddr FIT config (%d)\n", ret);
 			goto fail;
 		}
+		printf("Post-ddr FIT config loaded; ramdump image now resident in DDR\n");
 
 		qclib_set_stage(QCLIB_STAGE_2);
 		ret = qcom_spl_invoke_qclib();

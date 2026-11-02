@@ -155,7 +155,7 @@ int __weak qclib_populate_interface_table(struct interface_table *if_tbl,
 }
 
 static int qclib_find_fit_nodes(const void *fit, int *images_node,
-				int *qclib_node)
+				int *qclib_node, int *ramdump_node)
 {
 	*images_node = fdt_subnode_offset(fit, 0, "images");
 	if (*images_node < 0) {
@@ -163,16 +163,28 @@ static int qclib_find_fit_nodes(const void *fit, int *images_node,
 		return -ENOENT;
 	}
 
+	/*
+	 * QCLIB's own "qclib_1" FIT node is the jump target for every
+	 * stage. Stage 2 re-invokes the *same* QCLIB firmware image
+	 * already resident from stage 1 - it does not jump into a
+	 * separate "qclib_2" binary or into the ramdump image itself.
+	 */
+	*qclib_node = fdt_subnode_offset(fit, *images_node, "qclib_1");
+	if (*qclib_node < 0) {
+		pr_err("Failed to find qclib_1 node in FIT\n");
+		return -ENOENT;
+	}
+
 	if (g_qclib_stage == QCLIB_STAGE_2) {
-		*qclib_node = fdt_subnode_offset(fit, *images_node, "ramdump");
-		if (*qclib_node < 0) {
+		/*
+		 * Only the ramdump image's load address is needed here (to
+		 * publish via the "ramdump_metadata" interface-table entry
+		 * below) - QCLIB itself, resolved above, remains the jump
+		 * target.
+		 */
+		*ramdump_node = fdt_subnode_offset(fit, *images_node, "ramdump");
+		if (*ramdump_node < 0) {
 			pr_err("Failed to find ramdump node in FIT\n");
-			return -ENOENT;
-		}
-	} else {
-		*qclib_node = fdt_subnode_offset(fit, *images_node, "qclib_1");
-		if (*qclib_node < 0) {
-			pr_err("Failed to find qclib_1 node in FIT\n");
 			return -ENOENT;
 		}
 	}
@@ -185,6 +197,7 @@ int qcom_spl_invoke_qclib(void)
 	int ret;
 	int images_node;
 	int qclib_node;
+	int ramdump_node = -1;
 	const void *fit;
 	struct interface_table if_tbl;
 	u64 entry_point;
@@ -194,9 +207,9 @@ int qcom_spl_invoke_qclib(void)
 	/* Get FIT image from SPL load address */
 	fit = (const void *)CONFIG_SPL_LOAD_FIT_ADDRESS;
 
-	pr_debug("QCLIB invoke stage %u: fit=%p\n", stage, fit);
+	printf("QCLIB invoke stage %u: fit=%p\n", stage, fit);
 
-	ret = qclib_find_fit_nodes(fit, &images_node, &qclib_node);
+	ret = qclib_find_fit_nodes(fit, &images_node, &qclib_node, &ramdump_node);
 	if (ret)
 		return ret;
 
@@ -204,6 +217,13 @@ int qcom_spl_invoke_qclib(void)
 	if (ret)
 		return ret;
 
+	/*
+	 * qclib_node always resolves to QCLIB's own FIT node ("qclib_1") -
+	 * entry_point/load_addr below are always QCLIB's own addresses,
+	 * for both stage 1 and stage 2, so stage 2 jumps back into the
+	 * same already-resident QCLIB firmware rather than into the
+	 * ramdump image directly.
+	 */
 	ret = qcom_spl_get_fit_img_entry_point((void *)fit, qclib_node, &entry_point);
 	if (ret) {
 		pr_err("Failed to get qcom-lib-%u entry point (%d)\n", stage, ret);
@@ -215,6 +235,22 @@ int qcom_spl_invoke_qclib(void)
 		load_addr = (ulong)entry_point;
 
 	if (stage == QCLIB_STAGE_2) {
+		ulong ramdump_load_addr = 0;
+
+		/*
+		 * The ramdump collector image was already staged into DDR
+		 * by the post-ddr FIT reload before this call - fetch its
+		 * load address here purely to hand it to QCLIB via the
+		 * interface table.
+		 */
+		if (fit_image_get_load(fit, ramdump_node, &ramdump_load_addr)) {
+			pr_err("Failed to get ramdump load address\n");
+			return -ENOENT;
+		}
+
+		printf("Ramdump image loaded in DDR at address: 0x%08lx\n",
+		       ramdump_load_addr);
+
 		/*
 		 * The ramdump collector needs a fresh interface table -
 		 * qclib_init_iftbl() must run again right before this 2nd
@@ -232,17 +268,20 @@ int qcom_spl_invoke_qclib(void)
 		 * collector's crash-context metadata.
 		 */
 		ret = qclib_add_iftbl_entry(&if_tbl, RAMDUMP_METADATA,
-					    load_addr, 0);
+					    ramdump_load_addr, 0);
+		printf("\r\n FILL only ramdump data into interface table");
+		printf(" (ramdump_metadata @ 0x%08lx)\n", ramdump_load_addr);
 		if (ret)
 			return ret;
 	} else {
+		printf("\r\n FILL all data into interface table");
 		ret = qclib_populate_interface_table(&if_tbl, fit, images_node);
 		if (ret)
 			return ret;
 	}
 
-	pr_info("Jumping to qcom-lib-%u at 0x%llx\n", stage, entry_point);
-	pr_debug("qcom-lib-%u load address from FIT: 0x%llx\n", stage,
+	printf("Jumping to qcom-lib-%u at 0x%llx\n", stage, entry_point);
+	printf("qcom-lib-%u load address from FIT: 0x%llx\n", stage,
 		 load_addr);
 
 	/*

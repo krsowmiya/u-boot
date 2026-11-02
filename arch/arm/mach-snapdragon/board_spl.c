@@ -223,12 +223,12 @@ int __weak board_fit_config_name_match(const char *name)
 {
 	if (!(gd->flags & GD_FLG_SPL_INIT)) {
 		if (!strcmp(name, "pre-ddr")) {
-			printf("Selected FIT Config: %s\n", name);
+			printf("\r\nSelected FIT Config: %s\n", name);
 			return 0;
 		}
 	} else {
 		if (!strcmp(name, "post-ddr")) {
-			printf("Selected FIT Config: %s\n", name);
+			printf("\r\nSelected FIT Config: %s\n", name);
 			return 0;
 		}
 	}
