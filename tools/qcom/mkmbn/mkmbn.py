@@ -87,6 +87,7 @@ boards: dict[bytes, MbnData] = {
     b"qcom,ipq5210\0": MbnData(7, SwId.aboot),
     b"qcom,ipq5424\0": MbnData(7, SwId.aboot),
     b"qcom,ipq9574\0": MbnData(6, SwId.aboot),
+    b"qcom,nord\0": MbnData(7, SwId.tz),  # Dragonwing IQ10
 
     # msm8916/apq8016 has an "aboot" partition but the process is the same
     # They use header version 3.
