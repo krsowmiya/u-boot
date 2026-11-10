@@ -64,7 +64,9 @@ class Ehdr:
 	@staticmethod
 	def parse(b: bytes) -> Ehdr:
 		hdr_unpack = Ehdr.START_FORMAT.unpack_from(b)
-		hdr = Ehdr(*hdr_unpack)
+		hdr = Ehdr()
+		for field, value in zip(dataclasses.fields(Ehdr), hdr_unpack):
+			setattr(hdr, field.name, value)
 		assert hdr.ei_magic == b'\x7fELF', f"Invalid ELF header magic: {hdr.ei_magic}"
 		assert hdr.ei_data == 1, "Only little endian supported at the moment"
 		assert hdr.ei_version == 1, f"Unexpected ei_version: {hdr.ei_version}"
@@ -78,7 +80,9 @@ class Ehdr:
 
 		mem_unpack = mem_format.unpack_from(b, Ehdr.START_FORMAT.size)
 		end_unpack = Ehdr.END_FORMAT.unpack_from(b, Ehdr.START_FORMAT.size + mem_format.size)
-		return Ehdr(*hdr_unpack, *mem_unpack, *end_unpack)
+		for field, value in zip(dataclasses.fields(Ehdr), (*hdr_unpack, *mem_unpack, *end_unpack)):
+			setattr(hdr, field.name, value)
+		return hdr
 
 	def save(self, f: BinaryIO) -> int:
 		unpack = dataclasses.astuple(self)
@@ -169,6 +173,13 @@ def align(i: int, alignment: int) -> int:
 	mask = max(alignment - 1, 0)
 	return (i + mask) & ~mask
 
+def align_congruent(i: int, alignment: int, remainder: int) -> int:
+	if alignment <= 1:
+		return i
+	mask = alignment - 1
+	base = align(i - (remainder & mask), alignment)
+	return base + (remainder & mask)
+
 
 @dataclass
 class Elf:
@@ -207,7 +218,10 @@ class Elf:
 		pos = self.total_header_size()
 		for phdr in sorted(self.phdrs, key=lambda phdr: phdr.p_offset):
 			if phdr.p_offset and phdr.p_filesz:
-				phdr.p_offset = align(pos, phdr.p_align)
+				if phdr.p_type == Phdr.PT_LOAD:
+					phdr.p_offset = align_congruent(pos, phdr.p_align, phdr.p_vaddr)
+				else:
+					phdr.p_offset = align(pos, phdr.p_align)
 				pos = phdr.p_offset + phdr.p_filesz
 
 		# Ensure program header count is correct

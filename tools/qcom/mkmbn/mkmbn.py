@@ -19,6 +19,9 @@ from enum import Enum
 import struct
 
 MBN_ALIGN_SIZE = 4096
+PHDR_FLAGS_SEGMENT_TYPE_MASK = 0x07000000
+PHDR_FLAGS_SEGMENT_TYPE_SHIFT = 0x18
+PHDR_FLAGS_SEGMENT_TYPE_XBL_SEC = (0x5 << PHDR_FLAGS_SEGMENT_TYPE_SHIFT)
 
 verbose = False
 
@@ -29,6 +32,14 @@ def log(*args, **kwargs):
 def error(*args, **kwargs):
     print("mkmbn: ", file=sys.stderr, end='')
     print(*args, *kwargs, file=sys.stderr)
+
+def has_xbl_sec_segment(elff: Elf) -> bool:
+    for phdr in elff.phdrs:
+        if phdr.p_type != Phdr.PT_LOAD:
+            continue
+        if (phdr.p_flags & PHDR_FLAGS_SEGMENT_TYPE_MASK) == PHDR_FLAGS_SEGMENT_TYPE_XBL_SEC:
+            return True
+    return False
 
 class SwId(Enum):
     sbl1 = 0x00
@@ -93,6 +104,8 @@ boards: dict[bytes, MbnData] = {
     b"qcom,ipq5424\0": MbnData(7, SwId.aboot),
     b"qcom,ipq9574\0": MbnData(6, SwId.aboot),
     b"qcom,nord\0": MbnData(7, SwId.uefi, SwId.tz),  # Dragonwing IQ10
+    b"qcom,shikra\0": MbnData(6, SwId.uefi, SwId.sbl1),  # Dragonwing IQ2
+    b"qcom,shikra-iqs-evk\0": MbnData(6, SwId.uefi, SwId.sbl1),  # Dragonwing IQ2
 
     # msm8916/apq8016 has an "aboot" partition but the process is the same
     # They use header version 3.
@@ -138,13 +151,21 @@ if (len(args.bin) > 1):		# Create multi-elf
 
     sys.exit(0)
 
-elf = Elf()
-
 if args.bin:
     data: bytes = args.bin[0].read()
 else:
     print(f"Specify the binary to convert to MBN")
     sys.exit(1)
+
+is_elf_input = data.startswith(b"\x7fELF")
+if is_elf_input:
+    try:
+        elf = Elf.parse(data)
+    except Exception as e:
+        error(f"Failed to parse ELF input: {e}")
+        sys.exit(1)
+else:
+    elf = Elf()
 
 
 # dtb is at the end, so find the last match
@@ -191,11 +212,13 @@ if args.load == 0:
 log(f"Detected board {match.decode('UTF-8')} with load address {args.load:#x}")
 log(f"Using MBN version {mbn.version} and SWID {sw_id:#x}")
 
-data += b'\x00' * (-len(data) % MBN_ALIGN_SIZE)
-
-elf.phdrs.append(Phdr.from_bin(data, args.load))
-elf.ehdr.e_entry = args.load
-elf.update()
+if is_elf_input:
+    log("Input is ELF, preserving program headers")
+else:
+    data += b'\x00' * (-len(data) % MBN_ALIGN_SIZE)
+    elf.phdrs.append(Phdr.from_bin(data, args.load))
+    elf.ehdr.e_entry = args.load
+    elf.update()
 
 # QLI boards use v6 sw_id is "aboot"
 hashseg.generate(elf, mbn.version, sw_id)
