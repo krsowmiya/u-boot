@@ -331,9 +331,9 @@ void board_init_f(ulong dummy)
 		goto fail;
 	}
 
-	// if (readl(SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR) &
-	//     SHIKRA_TCSR_BOOT_MISC_DETECT_MASK) 
-	if (1)
+	if (readl(SHIKRA_TCSR_BOOT_MISC_DETECT_ADDR) &
+	    SHIKRA_TCSR_BOOT_MISC_DETECT_MASK) 
+	// if (1)
 	{
 		/*
 		 * QCLIB's DDR/PMIC bring-up above can leave the SDCC
