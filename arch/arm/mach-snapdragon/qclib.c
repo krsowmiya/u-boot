@@ -181,10 +181,20 @@ static int qclib_find_fit_nodes(const void *fit, int *images_node,
 		 * publish via the "ramdump_metadata" interface-table entry
 		 * below) - QCLIB itself, resolved above, remains the jump
 		 * target.
+		 *
+		 * The ramdump collector ELF is packed like qclib: one FIT
+		 * node per PT_LOAD segment ("ramdump_1", "ramdump_2", ...),
+		 * not a single unsuffixed "ramdump" node - a verbatim,
+		 * unsplit copy of the ELF would ship the ELF/program-header
+		 * bytes as "code" and use an address unrelated to the
+		 * segments' real physical load addresses. "ramdump_1" is
+		 * always the segment carrying the entry point (see
+		 * entry_rule: first_only in shikra.yaml), so its "load"
+		 * property is the correct address to publish here.
 		 */
-		*ramdump_node = fdt_subnode_offset(fit, *images_node, "ramdump");
+		*ramdump_node = fdt_subnode_offset(fit, *images_node, "ramdump_1");
 		if (*ramdump_node < 0) {
-			pr_err("Failed to find ramdump node in FIT\n");
+			pr_err("Failed to find ramdump_1 node in FIT\n");
 			return -ENOENT;
 		}
 	}
