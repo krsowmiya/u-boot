@@ -202,6 +202,27 @@ static int qclib_find_fit_nodes(const void *fit, int *images_node,
 	return 0;
 }
 
+static void qclib_dump_iftbl(const char *tag, const struct interface_table *tbl)
+{
+	uint i;
+
+	if (!tbl) {
+		printf("QCLIB iftbl dump (%s): <null>\n", tag);
+		return;
+	}
+
+	printf("QCLIB iftbl dump (%s): magic='%.8s' ver=%u num=%u max=%u ga=0x%08x\n",
+	       tag, tbl->magic_key, tbl->version, tbl->num_entries,
+	       tbl->max_entries, tbl->global_attributes);
+
+	for (i = 0; i < tbl->num_entries && i < tbl->max_entries; i++) {
+		const struct interface_table_entry *e = &tbl->if_table_entries[i];
+
+		printf("  [%u] name='%.24s' addr=0x%llx size=0x%x attr=0x%x\n",
+		       i, e->entry_name, e->address, e->size, e->attributes);
+	}
+}
+
 int qcom_spl_invoke_qclib(void)
 {
 	int ret;
@@ -272,6 +293,12 @@ int qcom_spl_invoke_qclib(void)
 		 */
 		qclib_init_iftbl(&if_tbl);
 
+		printf("\r\n pass on the qclib log buffer in interface table");
+		/* Reserve the common qclib_log_buffer slot. */
+		ret = qclib_add_iftbl_entry(&if_tbl, QCLIB_LOG_BUFFER, 0, 0);
+		if (ret)
+			return ret;
+
 		/*
 		 * Pass the ramdump image's load address into the interface
 		 * table under "ramdump_metadata" so QCLIB can locate the
@@ -281,18 +308,22 @@ int qcom_spl_invoke_qclib(void)
 					    ramdump_load_addr, 0);
 		printf("\r\n FILL only ramdump data into interface table");
 		printf(" (ramdump_metadata @ 0x%08lx)\n", ramdump_load_addr);
+
 		if (ret)
 			return ret;
+
+		printf("\r\n enable uart logging \r\n");
+		if_tbl.global_attributes |= QCLIB_GA_ENABLE_UART_LOGGING;
 	} else {
 		printf("\r\n FILL all data into interface table");
 		ret = qclib_populate_interface_table(&if_tbl, fit, images_node);
 		if (ret)
 			return ret;
 	}
-
 	printf("Jumping to qcom-lib-%u at 0x%llx\n", stage, entry_point);
 	printf("qcom-lib-%u load address from FIT: 0x%llx\n", stage,
 		 load_addr);
+	qclib_dump_iftbl("pre-qclib", &if_tbl);
 
 	/*
 	 * QCLIB is a separately-linked firmware image, not an AAPCS64
@@ -318,6 +349,7 @@ int qcom_spl_invoke_qclib(void)
 				"x19", "x20", "x21", "x22", "x23", "x24", "x25",
 				"x26", "x27", "x28", "x30", "cc", "memory");
 	}
+	qclib_dump_iftbl("post-qclib", &if_tbl);
 
 	return qcom_spl_soc_post_qclib_routine(&if_tbl);
 }
