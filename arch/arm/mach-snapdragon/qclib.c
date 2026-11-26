@@ -293,12 +293,14 @@ int qcom_spl_invoke_qclib(void)
 		 */
 		qclib_init_iftbl(&if_tbl);
 
-		printf("\r\n pass on the qclib log buffer in interface table");
-		/* Reserve the common qclib_log_buffer slot. */
-		ret = qclib_add_iftbl_entry(&if_tbl, QCLIB_LOG_BUFFER, 0, 0);
+		// printf("\r\n pass on the qclib log buffer in interface table");
+		// /* Reserve the common qclib_log_buffer slot. */
+		// ret = qclib_add_iftbl_entry(&if_tbl, QCLIB_LOG_BUFFER, 0, 0);
+		// if (ret)
+		// 	return ret;
+		ret = qclib_populate_interface_table(&if_tbl, fit, images_node);
 		if (ret)
 			return ret;
-
 		/*
 		 * Pass the ramdump image's load address into the interface
 		 * table under "ramdump_metadata" so QCLIB can locate the
@@ -306,14 +308,14 @@ int qcom_spl_invoke_qclib(void)
 		 */
 		ret = qclib_add_iftbl_entry(&if_tbl, RAMDUMP_METADATA,
 					    ramdump_load_addr, 0);
-		printf("\r\n FILL only ramdump data into interface table");
+		// printf("\r\n FILL only ramdump data into interface table");
 		printf(" (ramdump_metadata @ 0x%08lx)\n", ramdump_load_addr);
 
 		if (ret)
 			return ret;
 
-		printf("\r\n enable uart logging \r\n");
-		if_tbl.global_attributes |= QCLIB_GA_ENABLE_UART_LOGGING;
+		// printf("\r\n enable uart logging \r\n");
+		// if_tbl.global_attributes |= QCLIB_GA_ENABLE_UART_LOGGING;
 	} else {
 		printf("\r\n FILL all data into interface table");
 		ret = qclib_populate_interface_table(&if_tbl, fit, images_node);
